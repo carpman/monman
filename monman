@@ -1,0 +1,124 @@
+#!/usr/bin/env python2
+
+import hashlib
+import os
+import glob
+import json
+import argparse
+import time
+
+def open_or_create_config(config_path):
+    if not os.path.exists(config_path):
+        os.mkdir(config_path)
+    if not os.path.exists(os.path.join(config_path, 'config.json')):
+        default_options = {'current': '', 'env': {}, 'configs': []}
+        with open(os.path.join(config_path, 'config.json'), 'w') as new_config_file:
+            new_config_file.write(json.dumps(default_options))
+    with open(os.path.join(config_path, 'config.json'), 'r') as config_file:
+        return json.loads(config_file.read())
+
+def save_config(config, config_path):
+    with open(os.path.join(config_path, 'config.json'), 'w') as new_config_file:
+        new_config_file.write(json.dumps(config))
+    
+def get_active_devices():
+    device_paths = glob.glob('/sys/class/drm/card*-*/')
+    output = []
+    for device in device_paths:
+        with open(os.path.join(device, 'status'), 'r') as status_file:
+            if status_file.read().strip() == 'connected':
+                output.append(device)
+    return output
+
+def get_active_edid():
+    active_devices = get_active_devices()
+    output = []
+    for edid_path in [os.path.join(x, 'edid') for x in active_devices]:
+        with open(edid_path, 'rb') as edid_file:
+            m = hashlib.md5()
+            m.update(edid_file.read())
+            output.append(m.hexdigest())
+    return output
+
+def edid_match(a, b):
+    for x in a:
+        if x not in b:
+            return False
+    for x in b:
+        if x not in a:
+            return False
+    return True
+
+def get_current_config(config):
+    active_edid = get_active_edid()
+    for monitor_config in config['configs']:
+        if edid_match(monitor_config['edid'], active_edid):
+            return monitor_config
+
+def get_named_config(config, name):
+    for monitor_config in config['configs']:
+        if monitor_config['name'] == name:
+            return monitor_config
+
+def save_current_config(config, name):
+    new_config = {'name': name, 'load_command': [], 'unload_command': [], 'edid': get_active_edid()}
+    config['configs'].append(new_config)
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Automagically fix your monitors.')
+    parser.add_argument('-s', '--save', help='Save current config')
+    parser.add_argument('-q', '--query', help='Print name of current config', action='store_const', const=True)
+    parser.add_argument('-c', '--change', help='Change to the detected config', action='store_const', const=True)
+    parser.add_argument('-f', '--force', help='Force changes even if the config has not changed', action='store_const', const=True)
+    parser.add_argument('-p', '--profile', help='Force change to a particular profile, even if it is not detected')
+    parser.add_argument('-v', '--verbose', help='Print xrandr commands as they are run', action='store_const', const=True)
+    parser.add_argument('-l', '--config', help='Specify directory to use for config file', default=os.path.expanduser('~/.monman'))
+
+    args = parser.parse_args()
+
+    config = open_or_create_config(args.config)
+
+    if args.save:
+        save_current_config(config, args.save)
+        save_config(config)
+    elif args.query:
+        print(config['current'])
+    elif args.change:
+        mon_config = None
+        if args.profile:
+            mon_config = get_named_config(config, args.profile)
+            if not mon_config:
+                print("Config %s not found" % args.profile)
+        else:
+            mon_config = get_current_config(config)
+        if mon_config['name'] == config['current'] and not args.force:
+            print("Config %s already active" % (mon_config['name']))
+            exit(0)
+        else:
+            for envkey in config['env'].keys():
+                os.putenv(envkey, config['env'][envkey])
+            old_config = get_named_config(config, config['current'])
+            new_config = None
+            if args.profile:
+                new_config = get_named_config(config, args.profile)
+                if not new_config:
+                    print("Config %s not found" % args.profile)
+            else:
+                new_config = get_current_config(config)
+            print("Current config is %s, switching to %s" % (config['current'], new_config['name']))
+            if old_config:
+                for command in old_config['unload_command']:
+                    if args.verbose:
+                        print(command)
+                    if command:
+                        os.system(command)
+                        time.sleep(1)
+            for command in new_config['load_command']:
+                if args.verbose:
+                    print(command)
+                if command:
+                    os.system(command)
+                    time.sleep(1)
+            config['current'] = new_config['name']
+            save_config(config, args.config)
+
