@@ -80,7 +80,7 @@ if __name__ == '__main__':
 
     if args.save:
         save_current_config(config, args.save)
-        save_config(config)
+        save_config(config, args.config)
     elif args.query:
         print(config['current'])
     elif args.change:
