@@ -19,7 +19,7 @@ def open_or_create_config(config_path):
 
 def save_config(config, config_path):
     with open(os.path.join(config_path, 'config.json'), 'w') as new_config_file:
-        new_config_file.write(json.dumps(config))
+        new_config_file.write(json.dumps(config, sort_keys=True, indent=4, separators=(',', ': ')))
     
 def get_active_devices():
     device_paths = glob.glob('/sys/class/drm/card*-*/')
@@ -61,8 +61,14 @@ def get_named_config(config, name):
             return monitor_config
 
 def save_current_config(config, name):
-    new_config = {'name': name, 'load_command': [], 'unload_command': [], 'edid': get_active_edid()}
-    config['configs'].append(new_config)
+    existing_config = get_named_config(config, name)
+    if not existing_config:
+        new_config = {'name': name, 'load_command': [], 'unload_command': [], 'edid': get_active_edid()}
+        config['configs'].append(new_config)
+    else:
+        config['configs'].remove(existing_config)
+        existing_config['edid'] = get_active_edid()
+        config['configs'].append(existing_config)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Automagically fix your monitors.')
